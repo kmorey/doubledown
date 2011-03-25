@@ -23,6 +23,10 @@ When `doubledown` is run, rsync(1) is used to first download all files in _remot
 * `-h`, `--help`:
   Show a help message.
 
+## EXCLUDING FILES
+
+rsync filters will be imported from the file .rsync-filters located in the local root of the sync. Check the rsync manpage for usage.
+
 ## THEME SONG
 
 The Arcade Fire - "The Suburbs"

@@ -23,18 +23,22 @@ class Doubledown
     @user, @server, @remote = $1, $2, $3
     @user ||= ENV["USER"]
 
+		# find filter file
+		options << "--exclude=#{@local}/.rsync-filter"
+		if File::exists?("#{@local}/.rsync-filter")
+			options << "--filter=merge_#{@local}/.rsync-filter"
+		end
+
   end
 
   def run
-    $stderr.puts "# [doubledown-fsevents] syncing #{@local
-      } changes to #{@server}:#{@remote}"
+    #$stdout.puts "# [doubledown-fsevents] syncing #{@local} changes to #{@server}:#{@remote}"
     recache
     
-    notification = Growl.new
-    notification.title = 'Syncing'
-    notification.message = "syncing #{@local
-      } changes to #{@server}:#{@remote}"
-    notification.run if Growl.installed?
+    #notification = Growl.new
+    #notification.title = 'Syncing'
+    #notification.message = "syncing #{@local} changes to #{@server}:#{@remote}"
+    #notification.run if Growl.installed?
 
     fsevents_cb = proc do |stream, context, count, paths, flags, events|
       paths.regard_as("*")
@@ -86,7 +90,7 @@ private
 
   def deleted_file(pathname)
     pathname2 = "#{@remote}#{pathname.sub(@local, "")}"
-    ssh("rm -d #{pathname2.inspect} 2>/dev/null", "removed #{pathname2}")
+    ssh("rm -d #{pathname2.inspect} 2>/dev/null", "- removed #{pathname.sub(@local + "/", "")}")
   rescue => e
     $stderr.puts e.inspect
     $stderr.puts e.backtrace
@@ -94,6 +98,7 @@ private
   end
 
   def deleted_files(dirname)
+		#$stdout.puts (@cache[dirname] || {}).keys.join("\n")
     ((@cache[dirname] || {}).keys - Dir.entries(dirname)).each do |basename|
       deleted_file File.join(dirname, basename)
     end
@@ -101,32 +106,59 @@ private
 
   # Run a command in the background.  This actually forks twice, leaving the
   # intermediate process an opportunity to print a message.
-  def fork_exec(argv, message)
+  def fork_ssh(argv, message)
+		#$stdout.puts argv.join(" ")
     fork do
       if system(*argv)
-        $stderr.puts "# [doubledown-fsevents] #{message}"
+        $stdout.puts "[Sync Complete] #{message}"
         notification = Growl.new
-        notification.title = 'Process Complete'
-        notification.message = "#{message}"
+        notification.title = 'Sync Complete'
+        notification.message = "#{@user}@#{@server}:\n#{message}"
         notification.run if Growl.installed?
-      end
+			end
+		end
+	end
+
+  # Run a command in the background.  This actually forks twice, leaving the
+  # intermediate process an opportunity to print a message.
+	def fork_rsync(argv)
+		fork do
+			str_args = argv.join(' ')
+			result = `#{str_args}`
+
+			files = result.scan(/^(?:<.*?) +(.*)/)
+			if files.length > 0
+				message = "The following files were updated: \n- " + files.join("\n- ")
+				if $?.exitstatus == 0
+					notification = Growl.new
+					notification.title = 'Sync Complete'
+					notification.message = "#{message}"
+					notification.run if Growl.installed?
+
+					$stdout.puts "[Sync Complete] #{message}"
+				end
+			end
     end
   end
 
+=begin
   def modified_file(pathname)
     pathname2 = "#{@remote}#{pathname.sub(@local, "")}"
-    #$stderr.puts "# [doubledown-fsevents] uploading #{pathname2}"
-    fork_exec(["rsync", "-aiz"] + @options + [
-      pathname,
-      "#{@user}@#{@server}:#{pathname2}"
-    ], "uploaded #{pathname2} (excluded files were not uploaded)")
+    #$stdout.puts "# [doubledown-fsevents] uploading #{pathname2}"
+		#$stdout.puts args.join(" ")
+
   rescue => e
     $stderr.puts e.inspect
     $stderr.puts e.backtrace
     raise e
   end
+=end
 
   def modified_files(dirname)
+		args = ["rsync"] + @options + ["-avziR", "--verbose", "#{@local}/./", "#{@user}@#{@server}:#{@remote}" ]
+    fork_rsync(args)
+
+=begin
     Dir.foreach dirname do |basename|
       next if "." == basename || ".." == basename
       pathname = File.join(dirname, basename)
@@ -139,6 +171,8 @@ private
         modified_file pathname
       end
     end
+		modified_file dirname
+=end
   end
 
   # Keep a cache of `File::Stat` objects because the FSEvents API is not
@@ -159,7 +193,7 @@ private
 
   # Run a command remotely via SSH.  Avoid single quotes in the command.
   def ssh(command, message)
-    fork_exec([
+    fork_ssh([
       "ssh",
       "#{@user}@#{@server}",
       "/bin/sh -c '#{command}'",
@@ -179,11 +213,7 @@ OptionParser.new do |parser|
     options << "--list-only" }
 end.parse!
 
-# find excludes file
-options << "--exclude=.excludes*"
-if File::exists?("#{ARGV[0]}/.excludes")
-  options << "--exclude-from=#{ARGV[0]}/.excludes"
-end
+p options
 
 trap("EXIT") { Process.waitall }
 
