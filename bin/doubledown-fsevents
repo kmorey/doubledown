@@ -155,7 +155,7 @@ private
 =end
 
   def modified_files(dirname)
-		args = ["rsync"] + @options + ["-avziR", "--verbose", "#{@local}/./", "#{@user}@#{@server}:#{@remote}" ]
+		args = ["rsync"] + @options + ["-avziR", "--no-o", "--verbose", "#{@local}/./", "#{@user}@#{@server}:#{@remote}" ]
     fork_rsync(args)
 
 =begin

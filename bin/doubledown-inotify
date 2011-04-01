@@ -1,6 +1,8 @@
 #!/bin/sh
 set -e
 
+LOCKFILE="/tmp/.doubledown-inotify-lock"
+
 usage() {
 	echo "Usage: $(basename $0) <local> [<user>@]<server>:<remote>" >&2
 	[ -n "$1" ] && {
@@ -33,11 +35,14 @@ REMOTE="${2##*:}"
 [ -z "$SERVER" ] && usage
 [ -z "$REMOTE" ] && usage
 
-EXCLUDES="--exclude=.excludes*"
-if [ -e "$LOCAL/.excludes" ]
+FILTER="--exclude=$LOCKFILE --exclude=.rsync-filter*"
+if [ -e "$LOCAL/.rsync-filter" ]
 then
-    EXCLUDES="--exclude=.excludes* --exclude-from=$LOCAL/.excludes"
+	FILTER="--exclude=$LOCKFILE --exclude=$LOCAL/.rsync-filter --filter=merge_$LOCAL/.rsync-filter"
 fi
+
+# check if we can use notify-send
+export CAN_NOTIFY=`if type notify-send >/dev/null; then echo 1; else echo 0; fi`
 
 # FIXME This does not work.  `doubledown-inotify` should wait on all its
 # children before succumbing to `SIGINT`.  In practice, it's not a huge
@@ -56,17 +61,37 @@ inotifywait -mrq \
 	--format "%e %w%f" "$LOCAL" | while read LINE
 do
 	(
-		EVENT="$(echo "$LINE" | cut -d" " -f1)"
+		EVENT="$(echo "$LINE" | cut -d" " -f1 | tr '[A-Z]' '[a-z]')"
 		PATHNAME="$(echo "$LINE" | cut -d" " -f2-)"
 		PATHNAME2="${PATHNAME##$LOCAL/}"
 		case "$EVENT" in
 			delete|moved_from)
-				ssh "$USER@$SERVER" rm -d "$PATHNAME2" 2>/dev/null
+				echo "$EVENT $REMOTE/$PATHNAME2"
+				ssh "$USER@$SERVER" rm -d "$REMOTE/$PATHNAME2" 2>/dev/null
+				if [ "$CAN_NOTIFY" -eq "1" ]; then 
+					notify-send -t 500 "Removed $PATHNAME2" "$USER@$SERVER:\n- removed $PATHNAME2"; 
+				fi
 				echo "# [doubledown-inotify] removed $PATHNAME2" >&2;;
 			*)
-				#echo "# [doubledown-inotify] uploading $PATHNAME2" >&2
-				rsync $EXCLUDES $PRETEND -aiz "$PATHNAME" "$USER@$SERVER:$REMOTE/$PATHNAME2" 2>/dev/null
-				echo "# [doubledown-inotify] uploaded $PATHNAME2" >&2;;
+				echo "*) $EVENT"
+				#since we are syncing the entire root now, lock around rync
+				if ( set -o noclobber; echo "$$" > "$LOCKFILE") 2> /dev/null;
+				then
+					trap 'rm -f "$LOCKFILE"; exit $?' INT TERM EXIT
+
+					# rsync the entire folder if any file changes, this is so FILTER will work
+					UPDATED="$(rsync $FILTER $PRETEND -aivzR --no-o "$LOCAL/./" "$USER@$SERVER:$REMOTE" 2>/dev/null | grep '^<' | cut -d' ' -f2 | sed "s/^/- /g")"
+					if [ "$CAN_NOTIFY" -eq "1" ]; then 
+						notify-send -t 500 "Sync Completed" "The following files were updated: \n$UPDATED"; 
+					fi
+					#echo "# [doubledown-inotify] uploaded $PATHNAME2" >&2;;
+					echo "[Sync Complete] The following files were updated: \n$UPDATED" >&2;
+
+					rm -f "$LOCKFILE"
+					trap - INT TERM EXIT
+				else
+					echo "Failed to acquire lockfile: $LOCKFILE, rsync already running."
+				fi;;
 		esac
 	) &
 done

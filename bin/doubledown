@@ -42,10 +42,10 @@ REMOTE="${2##*:}"
 [ -z "$SERVER" ] && usage
 [ -z "$REMOTE" ] && usage
 
-FILTER="--filter=merge_.rsync-filter"
+FILTER="--exclude='/.rsync-filter*'"
 if [ -e "$LOCAL/.rsync-filter" ]
 then
-	FILTER="--exclude=/.rsync-filter --filter=merge_$LOCAL/.rsync-filter"
+	FILTER="--exclude='/.rsync-filter*' --filter=merge_$LOCAL/.rsync-filter"
 fi
 
 # Grab an existing SSH agent or start one just for `doubledown`, otherwise
@@ -76,11 +76,8 @@ fi
 # normally from local to remote.
 if which rsync >/dev/null
 then
-	#echo "# [doubledown] syncing baseline from remote" >&2
-	#rsync -azR --ignore-existing "$USER@$SERVER:$REMOTE/./" "$LOCAL"
 	echo "# [doubledown] syncing local changes to remote" >&2
-	echo rsync $FILTER $PRETEND -avzR "$LOCAL/./" "$USER@$SERVER:$REMOTE"
-	rsync $FILTER $PRETEND -avzR "$LOCAL/./" "$USER@$SERVER:$REMOTE"
+	rsync $FILTER $PRETEND -avzR --no-o "$LOCAL/./" "$USER@$SERVER:$REMOTE"
 else
 	echo "# [doubledown] rsync not found in your PATH" >&2
 	exit 1
